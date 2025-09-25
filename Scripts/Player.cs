@@ -25,8 +25,15 @@ public class Player : MonoBehaviour
     [Tooltip("Vertical force applied when jumping")]
     public float jumpForce = 7f;
 
-    [Tooltip("Length of the raycast used to check for ground/shadows")]
+    [Header("Ground Check Settings")]
+    [Tooltip("Length of all ground check rays (vertical + diagonal)")]
     public float groundCheckDistance = 0.2f;
+
+    [Tooltip("Angle of diagonal ground check rays (relative to straight down, in degrees)")]
+    public float diagonalCheckAngle = 30f;
+
+    [Tooltip("Enable dual diagonal checks (left + right) for better slope/edge detection")]
+    public bool enableDualDiagonalCheck = true;
 
     private Rigidbody2D rb; // Reference to the player's Rigidbody2D component
     private GameObject jumpMarker; // Active jump marker instance
@@ -177,8 +184,10 @@ public class Player : MonoBehaviour
                     moveSpeed,
                     jumpForce,
                     groundCheckDistance,
+                    diagonalCheckAngle,
+                    enableDualDiagonalCheck,
                     groundLayer,
-                    shadowLayer // Pass shadow layer to shadow controller (for its ground check)
+                    shadowLayer
                 );
             }
             else
@@ -208,23 +217,68 @@ public class Player : MonoBehaviour
         }
     }
 
-    // Checks if the player is standing on valid ground OR a shadow
+    // Checks if the player is standing on valid ground OR shadow (vertical + diagonal rays)
     public bool IsGrounded()
     {
-        // Combine ground and shadow layers using bitwise OR (detects both)
-        LayerMask combinedLayer = groundLayer | shadowLayer;
-        // Cast ray downward to check for collision with ground/shadow
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, Vector2.down, groundCheckDistance, combinedLayer);
+        // Combine ground and shadow layers for unified detection
+        LayerMask combinedDetectLayer = groundLayer | shadowLayer;
 
-        // Draw ray in Scene view for debugging (red = player's ground check)
-        Debug.DrawRay(transform.position, Vector2.down * groundCheckDistance, Color.red);
-        return hit.collider != null;
+        // Calculate diagonal ray directions (convert degrees to radians first)
+        float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
+        Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+        Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+        Vector2 verticalDownDir = Vector2.down;
+
+        // Cast rays and check for collisions
+        RaycastHit2D verticalHit = Physics2D.Raycast(transform.position, verticalDownDir, groundCheckDistance, combinedDetectLayer);
+        RaycastHit2D leftDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, leftDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
+        RaycastHit2D rightDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, rightDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
+
+        // Draw debug rays (visible in Scene view during play mode)
+        DrawDebugRays(verticalDownDir, leftDiagonalDir, rightDiagonalDir);
+
+        // Return true if ANY ray hits valid ground/shadow
+        return verticalHit.collider != null || leftDiagHit.collider != null || rightDiagHit.collider != null;
     }
 
-    // Draws a persistent gizmo for ground check ray (visible in Scene view)
+    // Draws debug rays for ground check visualization
+    private void DrawDebugRays(Vector2 verticalDir, Vector2 leftDiagDir, Vector2 rightDiagDir)
+    {
+        // Vertical ray (red)
+        Debug.DrawRay(transform.position, verticalDir * groundCheckDistance, Color.red);
+
+        // Diagonal rays (yellow = left, blue = right) if enabled
+        if (enableDualDiagonalCheck)
+        {
+            Debug.DrawRay(transform.position, leftDiagDir * groundCheckDistance, Color.yellow);
+            Debug.DrawRay(transform.position, rightDiagDir * groundCheckDistance, Color.blue);
+        }
+    }
+
+    // Draws persistent gizmos (visible in Scene view even in edit mode)
     void OnDrawGizmos()
     {
-        Gizmos.color = Color.red;
-        Gizmos.DrawLine(transform.position, transform.position + Vector3.down * groundCheckDistance);
+        if (!Application.isPlaying) // Avoid overlapping with play-mode debug rays
+        {
+            LayerMask combinedDetectLayer = groundLayer | shadowLayer;
+            float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
+            Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+            Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+            Vector2 verticalDownDir = Vector2.down;
+
+            // Vertical gizmo ray (red)
+            Gizmos.color = Color.red;
+            Gizmos.DrawLine(transform.position, transform.position + (Vector3)verticalDownDir * groundCheckDistance);
+
+            // Diagonal gizmo rays (yellow = left, blue = right) if enabled
+            if (enableDualDiagonalCheck)
+            {
+                Gizmos.color = Color.yellow;
+                Gizmos.DrawLine(transform.position, transform.position + (Vector3)leftDiagonalDir * groundCheckDistance);
+
+                Gizmos.color = Color.blue;
+                Gizmos.DrawLine(transform.position, transform.position + (Vector3)rightDiagonalDir * groundCheckDistance);
+            }
+        }
     }
 }

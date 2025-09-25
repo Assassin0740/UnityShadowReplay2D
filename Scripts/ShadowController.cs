@@ -11,18 +11,24 @@ public class ShadowController : MonoBehaviour
     private bool hasLanded = false; // Tracks if the shadow has landed after finishing actions
     private bool isJumping = false; // Tracks if the shadow is in mid-air to prevent consecutive jumps
 
-    // Movement parameters copied from the player to ensure consistent behavior
-    private float moveSpeed; // Horizontal movement speed
-    private float jumpForce; // Vertical force applied when jumping
-    private float groundCheckDistance; // Length of raycast used for ground detection
-    private LayerMask groundLayer; // Layer mask to identify what counts as ground
+    // Movement & Ground Check Parameters (copied from Player for consistency)
+    private float moveSpeed; // Horizontal movement speed (matches Player)
+    private float jumpForce; // Vertical jump force (matches Player)
+    private float groundCheckDistance; // Length of ground check rays (matches Player)
+    private float diagonalCheckAngle; // Angle of diagonal rays (matches Player)
+    private bool enableDualDiagonalCheck; // Dual diagonal check toggle (matches Player)
+    private LayerMask groundLayer; // Layer mask for ground detection
+    private LayerMask shadowLayer; // Layer mask for shadow detection (to stand on other shadows)
 
+    // Initialize shadow with player's recorded data and parameters
     public void Initialize(
         List<Player.PlayerAction> inputs,
         float duration,
         float speed,
         float jump,
-        float groundCheck,
+        float groundCheckLen,
+        float diagAngle,
+        bool enableDualDiag,
         LayerMask ground,
         LayerMask shadow)
     {
@@ -30,16 +36,21 @@ public class ShadowController : MonoBehaviour
         actionDuration = duration;
         moveSpeed = speed;
         jumpForce = jump;
-        groundCheckDistance = groundCheck;
+        groundCheckDistance = groundCheckLen;
+        diagonalCheckAngle = diagAngle;
+        enableDualDiagonalCheck = enableDualDiag;
         groundLayer = ground;
+        shadowLayer = shadow;
 
-        // Ensure the shadow has a Rigidbody2D component for physics interactions
+        // Ensure shadow has a Rigidbody2D component (add if missing)
         rb = GetComponent<Rigidbody2D>();
         if (rb == null)
         {
             rb = gameObject.AddComponent<Rigidbody2D>();
         }
 
+        // Configure shadow physics (gravity scale = 2 for faster fall than player)
+        rb.gravityScale = 2;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
         // Reset all state flags to initial conditions
@@ -50,14 +61,14 @@ public class ShadowController : MonoBehaviour
 
     void Update()
     {
-        // Exit early if there's no input data, or the shadow has already landed and finished
+        // Exit early if no input data or shadow has already landed
         if (recordedInputs == null || recordedInputs.Count == 0 || hasLanded)
             return;
 
-        // Update ground status and jump state before processing actions
+        // Update ground status and jump lock before processing actions
         UpdateGroundedState();
 
-        // Destroy shadow once all actions are finished and it has landed
+        // Destroy shadow once actions are finished AND it has landed
         if (hasFinishedAction && !isJumping)
         {
             hasLanded = true;
@@ -65,21 +76,21 @@ public class ShadowController : MonoBehaviour
             return;
         }
 
-        // Track time elapsed since starting the action replay
+        // Update playback time (tracks how far into the action sequence we are)
         playbackTime += Time.deltaTime;
 
-        // Mark actions as finished when replay time exceeds recorded duration
+        // Mark actions as finished when replay exceeds recorded duration
         if (playbackTime >= actionDuration && !hasFinishedAction)
         {
             hasFinishedAction = true;
             return;
         }
 
-        // Process recorded inputs while there are actions left to play
+        // Process recorded inputs if still in the action sequence
         if (!hasFinishedAction)
         {
             Player.PlayerAction currentInput = GetCurrentInput();
-            // Only allow jumping if the shadow is on the ground (not mid-air)
+            // Only allow jumping if shadow is grounded (not mid-air)
             if (currentInput.isJumpPressed && !isJumping)
             {
                 Jump();
@@ -90,24 +101,24 @@ public class ShadowController : MonoBehaviour
         }
     }
 
-    // Updates whether the shadow is on the ground and manages jump state locking
+    // Updates shadow's grounded state and manages jump locking
     private void UpdateGroundedState()
     {
         bool isCurrentlyGrounded = IsGrounded();
 
-        // Unlock jump capability when landing
+        // Unlock jump when landing on valid surface
         if (isCurrentlyGrounded && isJumping)
         {
             isJumping = false;
         }
-        // Lock jump capability when leaving the ground
+        // Lock jump when leaving the ground
         else if (!isCurrentlyGrounded && !isJumping)
         {
             isJumping = true;
         }
     }
 
-    // Retrieves the recorded input that matches the current playback time
+    // Retrieves the recorded input matching the current playback time
     private Player.PlayerAction GetCurrentInput()
     {
         for (int i = 0; i < recordedInputs.Count; i++)
@@ -117,17 +128,18 @@ public class ShadowController : MonoBehaviour
                 return recordedInputs[i];
             }
         }
-        // Return the last input if beyond recorded time range
+        // Return last input if playback exceeds recorded time range
         return recordedInputs[recordedInputs.Count - 1];
     }
 
-    // Handles horizontal movement using recorded input
+    // Applies horizontal movement to the shadow
     private void Move(float input)
     {
+        // Maintain vertical velocity (gravity/jump) while updating horizontal speed
         Vector2 movement = new Vector2(input * moveSpeed, rb.velocity.y);
         rb.velocity = movement;
 
-        // Flip sprite direction based on movement input
+        // Flip shadow sprite to match movement direction
         if (input != 0)
         {
             transform.localScale = new Vector3(Mathf.Sign(input), 1f, 1f);
@@ -138,27 +150,76 @@ public class ShadowController : MonoBehaviour
     private void Jump()
     {
         rb.velocity = new Vector2(rb.velocity.x, jumpForce);
-        isJumping = true; // Prevent additional jumps until landing
+        isJumping = true; // Prevent multiple jumps mid-air
     }
 
-    // Checks if the shadow is touching the ground using a raycast
+    // Checks if shadow is on valid ground OR other shadows (vertical + diagonal rays)
     private bool IsGrounded()
     {
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, Vector2.down, groundCheckDistance, groundLayer);
-        Debug.DrawRay(transform.position, Vector2.down * groundCheckDistance, Color.blue); // Visualize ground check in Scene view
-        return hit.collider != null;
+        // Combine ground and shadow layers for unified detection
+        LayerMask combinedDetectLayer = groundLayer | shadowLayer;
+
+        // Calculate diagonal ray directions (degrees ¡ú radians)
+        float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
+        Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+        Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+        Vector2 verticalDownDir = Vector2.down;
+
+        // Cast rays and check for collisions
+        RaycastHit2D verticalHit = Physics2D.Raycast(transform.position, verticalDownDir, groundCheckDistance, combinedDetectLayer);
+        RaycastHit2D leftDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, leftDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
+        RaycastHit2D rightDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, rightDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
+
+        // Draw debug rays (visible in Scene view during play mode)
+        DrawDebugRays(verticalDownDir, leftDiagonalDir, rightDiagonalDir);
+
+        // Return true if ANY ray hits valid surface
+        return verticalHit.collider != null || leftDiagHit.collider != null || rightDiagHit.collider != null;
     }
 
-    // Destroys the shadow once all actions are complete and it has landed
+    // Draws debug rays for shadow's ground check
+    private void DrawDebugRays(Vector2 verticalDir, Vector2 leftDiagDir, Vector2 rightDiagDir)
+    {
+        // Vertical ray (cyan)
+        Debug.DrawRay(transform.position, verticalDir * groundCheckDistance, Color.cyan);
+
+        // Diagonal rays (magenta = left, green = right) if enabled
+        if (enableDualDiagonalCheck)
+        {
+            Debug.DrawRay(transform.position, leftDiagDir * groundCheckDistance, Color.magenta);
+            Debug.DrawRay(transform.position, rightDiagDir * groundCheckDistance, Color.green);
+        }
+    }
+
+    // Destroys shadow after action playback and landing
     void FinishPlayback()
     {
         Destroy(gameObject);
     }
 
-    // Visualizes the ground check ray in the Unity Editor
+    // Draws persistent gizmos for shadow's ground check (edit mode visibility)
     void OnDrawGizmos()
     {
-        Gizmos.color = Color.blue;
-        Gizmos.DrawLine(transform.position, transform.position + Vector3.down * groundCheckDistance);
+        if (!Application.isPlaying) // Avoid overlapping with play-mode debug rays
+        {
+            float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
+            Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+            Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
+            Vector2 verticalDownDir = Vector2.down;
+
+            // Vertical gizmo ray (cyan)
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawLine(transform.position, transform.position + (Vector3)verticalDownDir * groundCheckDistance);
+
+            // Diagonal gizmo rays (magenta = left, green = right) if enabled
+            if (enableDualDiagonalCheck)
+            {
+                Gizmos.color = Color.magenta;
+                Gizmos.DrawLine(transform.position, transform.position + (Vector3)leftDiagonalDir * groundCheckDistance);
+
+                Gizmos.color = Color.green;
+                Gizmos.DrawLine(transform.position, transform.position + (Vector3)rightDiagonalDir * groundCheckDistance);
+            }
+        }
     }
 }

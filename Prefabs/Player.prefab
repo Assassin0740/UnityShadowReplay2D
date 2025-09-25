@@ -166,6 +166,11 @@ MonoBehaviour:
   groundLayer:
     serializedVersion: 2
     m_Bits: 0
+  shadowLayer:
+    serializedVersion: 2
+    m_Bits: 0
   moveSpeed: 5
   jumpForce: 10
-  groundCheckDistance: 0.2
+  groundCheckDistance: 1.2
+  diagonalCheckAngle: 15
+  enableDualDiagonalCheck: 1
