@@ -1,167 +1,173 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// Requires Rigidbody2D component
+// Requires Rigidbody2D component to enable physics-based movement
 [RequireComponent(typeof(Rigidbody2D))]
 public class Player : MonoBehaviour
 {
     [Header("Reference Settings")]
-    [Tooltip("Jump marker prefab")]
+    [Tooltip("Prefab for the visual jump marker")]
     public GameObject jumpMarkerPrefab;
 
-    [Tooltip("Player shadow prefab")]
+    [Tooltip("Prefab for the player's shadow clone")]
     public GameObject shadowPrefab;
 
-    [Tooltip("Collision layer for ground detection")]
+    [Tooltip("Layer mask for detecting ground surfaces")]
     public LayerMask groundLayer;
 
+    [Tooltip("Layer mask for detecting shadow clones (to jump on shadows)")]
+    public LayerMask shadowLayer;
+
     [Header("Movement Settings")]
-    [Tooltip("Movement speed")]
+    [Tooltip("Horizontal movement speed (units per second)")]
     public float moveSpeed = 5f;
 
-    [Tooltip("Jump force")] //
+    [Tooltip("Vertical force applied when jumping")]
     public float jumpForce = 7f;
 
-    [Tooltip(" Ground check raycast length")]
+    [Tooltip("Length of the raycast used to check for ground/shadows")]
     public float groundCheckDistance = 0.2f;
 
-    private Rigidbody2D rb; // Reference to Rigidbody2D component
-    private GameObject jumpMarker; // Jump marker object
-    private GameObject currentShadow; // Reference to current shadow
-    private bool hasCreatedMarker = false; // Whether marker has been created
-    private bool hasCreatedShadow = false; // Whether shadow has been created
-    private float markerCreateTime; // Time point when marker was created
+    private Rigidbody2D rb; // Reference to the player's Rigidbody2D component
+    private GameObject jumpMarker; // Active jump marker instance
+    private GameObject currentShadow; // Reference to the most recently spawned shadow
+    private bool hasCreatedMarker = false; // Tracks if a jump marker exists
+    private bool hasCreatedShadow = false; // Tracks if a shadow is active
+    private float markerCreateTime; // Timestamp when the marker was spawned
 
-    // List used to record player actions
+    // List to store recorded player inputs for shadow replication
     private List<PlayerAction> actionRecords = new List<PlayerAction>();
-    private bool isRecording = false; // Start recording only after marker is created
-    private float recordStartTime; // Time point when recording starts
+    private bool isRecording = false; // Toggles input recording (starts after marker spawn)
+    private float recordStartTime; // Timestamp when input recording began
 
-    // Data structure for recording player actions (records input)
+    // Data structure to store individual player input frames
     public struct PlayerAction
     {
-        public float time; // Relative timestamp
-        public float horizontalInput; // Horizontal input (-1, 0, 1)
-        public bool isJumpPressed; // Whether jump key is pressed
+        public float time; // Time since recording started (relative timestamp)
+        public float horizontalInput; // Horizontal input value (-1 = left, 0 = none, 1 = right)
+        public bool isJumpPressed; // Whether the jump key was pressed this frame
     }
 
     void Start()
     {
-        // Get Rigidbody2D component
+        // Get and cache the Rigidbody2D component on start
         rb = GetComponent<Rigidbody2D>();
     }
 
     void Update()
     {
-         // Record player actions (only after marker is created and before shadow is created)
+        // Record inputs only if recording is active and no shadow has been spawned yet
         if (isRecording && !hasCreatedShadow)
         {
             RecordPlayerAction();
         }
 
-        // Player movement control
+        // Handle horizontal movement input
         float moveInput = Input.GetAxisRaw("Horizontal");
         Move(moveInput);
 
-        // Jump detection (W key to jump)
+        // Handle jump input (only if player is on ground or shadow)
         if (Input.GetKeyDown(KeyCode.W) && IsGrounded())
         {
             Jump();
         }
 
-        // S key control: first create marker, then create shadow
+        // Handle shadow marker system with S key
         if (Input.GetKeyDown(KeyCode.S))
         {
-            // First press S: create marker and start recording actions
+            // First S press: Spawn marker and start recording inputs
             if (!hasCreatedMarker)
             {
                 CreateJumpMarker();
                 hasCreatedMarker = true;
                 markerCreateTime = Time.time;
-                // Start recording actions from marker creation to shadow creation
+                // Reset recording state and start fresh
                 actionRecords.Clear();
                 recordStartTime = Time.time;
                 isRecording = true;
             }
-            // Second press S: create shadow (if marker exists and shadow not created)
+            // Second S press: Spawn shadow from recorded inputs and reset marker state
             else if (hasCreatedMarker && !hasCreatedShadow)
             {
                 CreatePlayerShadow();
-                // Key modification: reset state immediately after shadow creation to allow new marker creation
+                // Reset marker/shadow flags to allow spawning new markers immediately
                 hasCreatedMarker = false;
                 hasCreatedShadow = false;
-                // Destroy marker when shadow is created
+                // Destroy marker once shadow is spawned
                 if (jumpMarker != null)
                 {
                     Destroy(jumpMarker);
                     jumpMarker = null;
                 }
-                isRecording = false; // Stop recording
+                isRecording = false; // Stop input recording
             }
         }
     }
 
-    // Record player input
+    // Records the current input state as a PlayerAction and adds it to the action list
     void RecordPlayerAction()
     {
         PlayerAction newAction = new PlayerAction();
-        newAction.time = Time.time - recordStartTime; // Time relative to recording start
-        newAction.horizontalInput = Input.GetAxisRaw("Horizontal"); // Record horizontal input
-        newAction.isJumpPressed = Input.GetKeyDown(KeyCode.W); // Record whether jump key is pressed
+        newAction.time = Time.time - recordStartTime; // Use relative time for consistent replay
+        newAction.horizontalInput = Input.GetAxisRaw("Horizontal");
+        newAction.isJumpPressed = Input.GetKeyDown(KeyCode.W);
 
         actionRecords.Add(newAction);
     }
 
-    // Player movement
+    // Applies horizontal movement based on input
     public void Move(float input)
     {
+        // Maintain vertical velocity (from gravity/jump) while updating horizontal velocity
         Vector2 movement = new Vector2(input * moveSpeed, rb.velocity.y);
         rb.velocity = movement;
 
-        // Flip player facing direction
+        // Flip player sprite to face movement direction (if moving left/right)
         if (input != 0)
         {
             transform.localScale = new Vector3(Mathf.Sign(input), 1f, 1f);
         }
     }
 
-    // Player jump (W key)
+    // Applies vertical jump force to the player
     public void Jump()
     {
+        // Keep horizontal velocity intact while setting vertical jump force
         rb.velocity = new Vector2(rb.velocity.x, jumpForce);
     }
 
-    // Create jump marker
+    // Spawns a visual marker at the player's current position
     void CreateJumpMarker()
     {
         if (jumpMarkerPrefab != null)
         {
-            // Destroy existing marker if it exists
+            // Destroy existing marker first to prevent duplicates
             if (jumpMarker != null)
                 Destroy(jumpMarker);
 
+            // Spawn new marker at player position with default rotation
             jumpMarker = Instantiate(jumpMarkerPrefab, transform.position, Quaternion.identity);
             jumpMarker.name = "JumpMarker";
         }
         else
         {
-            // Log error: Please assign jump marker prefab
-            Debug.LogError("Please assign jump marker prefab!");
+            Debug.LogError("Jump marker prefab is not assigned! Assign it in the Player inspector.");
         }
     }
 
-    // 创建玩家影子 // Create player shadow
+    // Spawns a shadow clone that replicates recorded player actions
     void CreatePlayerShadow()
     {
         if (shadowPrefab != null && jumpMarker != null)
         {
+            // Spawn shadow at the marker's position, matching player's rotation
             currentShadow = Instantiate(shadowPrefab, jumpMarker.transform.position, transform.rotation);
-            currentShadow.name = "PlayerShadow_" + Time.time; // Add unique name to each shadow
+            currentShadow.name = "PlayerShadow_" + Time.time; // Unique name for debugging
 
-            // Calculate action duration
+            // Calculate total time of the recorded action sequence
             float actionDuration = Time.time - markerCreateTime;
 
-            // Get shadow controller and initialize
+            // Get the ShadowController component and initialize it with recorded data
             ShadowController shadowController = currentShadow.GetComponent<ShadowController>();
             if (shadowController != null)
             {
@@ -171,26 +177,25 @@ public class Player : MonoBehaviour
                     moveSpeed,
                     jumpForce,
                     groundCheckDistance,
-                    groundLayer
+                    groundLayer,
+                    shadowLayer // Pass shadow layer to shadow controller (for its ground check)
                 );
             }
             else
             {
-                // Log error: ShadowController component not attached to shadow prefab
-                Debug.LogError(" ShadowController component not attached to shadow prefab!");
+                Debug.LogError("Shadow prefab is missing the ShadowController component!");
             }
 
-            // Set up shadow collision
+            // Configure collision settings between player and shadow
             SetupShadowCollision(currentShadow);
         }
         else
         {
-            // Log error: Please ensure shadow prefab and jump marker are properly set up
-            Debug.LogError("Please ensure shadow prefab and jump marker are properly set up!");
+            Debug.LogError("Shadow prefab or jump marker is missing! Ensure both are set up.");
         }
     }
 
-    // Set up shadow collision
+    // Configures collision between player and shadow (prevents passing through each other)
     void SetupShadowCollision(GameObject shadow)
     {
         Collider2D playerCollider = GetComponent<Collider2D>();
@@ -198,19 +203,25 @@ public class Player : MonoBehaviour
 
         if (playerCollider != null && shadowCollider != null)
         {
-            // 不忽略玩家与影子的碰撞 // Do not ignore collision between player and shadow
+            // Do NOT ignore collision between player and shadow (allows player to stand on shadow)
             Physics2D.IgnoreCollision(playerCollider, shadowCollider, false);
         }
     }
 
-    // Check if on ground
+    // Checks if the player is standing on valid ground OR a shadow
     public bool IsGrounded()
     {
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, Vector2.down, groundCheckDistance, groundLayer);
+        // Combine ground and shadow layers using bitwise OR (detects both)
+        LayerMask combinedLayer = groundLayer | shadowLayer;
+        // Cast ray downward to check for collision with ground/shadow
+        RaycastHit2D hit = Physics2D.Raycast(transform.position, Vector2.down, groundCheckDistance, combinedLayer);
+
+        // Draw ray in Scene view for debugging (red = player's ground check)
+        Debug.DrawRay(transform.position, Vector2.down * groundCheckDistance, Color.red);
         return hit.collider != null;
     }
 
-    // Draw ground check raycast
+    // Draws a persistent gizmo for ground check ray (visible in Scene view)
     void OnDrawGizmos()
     {
         Gizmos.color = Color.red;
