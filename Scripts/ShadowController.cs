@@ -3,24 +3,25 @@ using UnityEngine;
 
 public class ShadowController : MonoBehaviour
 {
-    private List<Player.PlayerAction> recordedInputs; // Stores the sequence of player inputs to replicate
-    private float actionDuration; // Total time length of the recorded action sequence
-    private float playbackTime = 0; // Elapsed time since starting the action replay
-    private Rigidbody2D rb; // Reference to the shadow's Rigidbody2D component for physics
-    private bool hasFinishedAction = false; // Tracks if all recorded actions have been processed
-    private bool hasLanded = false; // Tracks if the shadow has landed after finishing actions
-    private bool isJumping = false; // Tracks if the shadow is in mid-air to prevent consecutive jumps
+    private List<Player.PlayerAction> recordedInputs; // 存储玩家输入序列
+    private float actionDuration; // 记录的动作总时长
+    private float playbackTime = 0; // 动作回放的已流逝时间
+    private Rigidbody2D rb; // 影子的刚体组件
+    private bool hasFinishedAction = false; // 标记动作是否已全部回放完成
+    private bool hasLanded = false; // 标记影子是否已落地（用于触发消失）
+    private bool isJumping = false; // 标记影子是否在跳跃中（防止连跳）
 
-    // Movement & Ground Check Parameters (copied from Player for consistency)
-    private float moveSpeed; // Horizontal movement speed (matches Player)
-    private float jumpForce; // Vertical jump force (matches Player)
-    private float groundCheckDistance; // Length of ground check rays (matches Player)
-    private float diagonalCheckAngle; // Angle of diagonal rays (matches Player)
-    private bool enableDualDiagonalCheck; // Dual diagonal check toggle (matches Player)
-    private LayerMask groundLayer; // Layer mask for ground detection
-    private LayerMask shadowLayer; // Layer mask for shadow detection (to stand on other shadows)
+    // 移动与地面检测参数（与玩家保持一致）
+    private float moveSpeed; // 水平移动速度
+    private float jumpForce; // 跳跃力
+    private float groundCheckDistance; // 地面检测射线长度
+    private float diagonalCheckAngle; // 斜向检测角度
+    private bool enableDualDiagonalCheck; // 是否启用双向斜向检测
+    private LayerMask groundLayer; // 地面图层
+    private LayerMask shadowLayer; // 影子图层（用于站在其他影子上）
+    private LayerMask playerLayer; // 玩家图层（新增：用于检测是否站在玩家身上）
 
-    // Initialize shadow with player's recorded data and parameters
+    // 初始化影子（接收玩家的记录数据和参数）
     public void Initialize(
         List<Player.PlayerAction> inputs,
         float duration,
@@ -30,7 +31,8 @@ public class ShadowController : MonoBehaviour
         float diagAngle,
         bool enableDualDiag,
         LayerMask ground,
-        LayerMask shadow)
+        LayerMask shadow,
+        LayerMask player) // 新增：接收玩家图层参数
     {
         recordedInputs = inputs;
         actionDuration = duration;
@@ -41,19 +43,20 @@ public class ShadowController : MonoBehaviour
         enableDualDiagonalCheck = enableDualDiag;
         groundLayer = ground;
         shadowLayer = shadow;
+        playerLayer = player; // 赋值玩家图层
 
-        // Ensure shadow has a Rigidbody2D component (add if missing)
+        // 确保影子有刚体组件（没有则自动添加）
         rb = GetComponent<Rigidbody2D>();
         if (rb == null)
         {
             rb = gameObject.AddComponent<Rigidbody2D>();
         }
 
-        // Configure shadow physics (gravity scale = 2 for faster fall than player)
+        // 配置影子物理参数（重力为玩家的2倍，下落更快）
         rb.gravityScale = 2;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
-        // Reset all state flags to initial conditions
+        // 重置所有状态标记
         hasFinishedAction = false;
         hasLanded = false;
         isJumping = false;
@@ -61,64 +64,64 @@ public class ShadowController : MonoBehaviour
 
     void Update()
     {
-        // Exit early if no input data or shadow has already landed
+        // 若没有输入记录，或影子已落地消失，则提前退出
         if (recordedInputs == null || recordedInputs.Count == 0 || hasLanded)
             return;
 
-        // Update ground status and jump lock before processing actions
+        // 更新落地状态和跳跃锁
         UpdateGroundedState();
 
-        // Destroy shadow once actions are finished AND it has landed
-        if (hasFinishedAction && !isJumping)
+        // 动作回放完成后，若已落地（地面或玩家身上），则销毁影子
+        if (hasFinishedAction && IsGrounded())
         {
             hasLanded = true;
             FinishPlayback();
             return;
         }
 
-        // Update playback time (tracks how far into the action sequence we are)
+        // 更新回放时间（跟踪当前回放进度）
         playbackTime += Time.deltaTime;
 
-        // Mark actions as finished when replay exceeds recorded duration
+        // 当回放时间超过动作总时长，标记动作已完成
         if (playbackTime >= actionDuration && !hasFinishedAction)
         {
             hasFinishedAction = true;
             return;
         }
 
-        // Process recorded inputs if still in the action sequence
+        // 若动作未完成，处理当前时间点的输入
         if (!hasFinishedAction)
         {
             Player.PlayerAction currentInput = GetCurrentInput();
-            // Only allow jumping if shadow is grounded (not mid-air)
+            // 只有在落地状态（可跳跃）且检测到跳跃输入时，才执行跳跃
             if (currentInput.isJumpPressed && !isJumping)
             {
                 Jump();
             }
 
-            // Apply horizontal movement based on recorded input
+            // 应用水平移动
             Move(currentInput.horizontalInput);
         }
     }
 
-    // Updates shadow's grounded state and manages jump locking
+    // 更新影子的落地状态，并管理跳跃锁
     private void UpdateGroundedState()
     {
-        bool isCurrentlyGrounded = IsGrounded();
+        bool isCurrentlyGrounded = IsGrounded(); // 检测是否站在地面/影子/玩家身上
 
-        // Unlock jump when landing on valid surface
+        // 落地时解锁跳跃（允许再次跳跃）
         if (isCurrentlyGrounded && isJumping)
         {
             isJumping = false;
         }
-        // Lock jump when leaving the ground
+        // 离开地面时锁定跳跃（防止空中连跳）
         else if (!isCurrentlyGrounded && !isJumping)
         {
             isJumping = true;
         }
     }
 
-    // Retrieves the recorded input matching the current playback time
+    // 获取当前回放时间点对应的玩家输入
     private Player.PlayerAction GetCurrentInput()
     {
         for (int i = 0; i < recordedInputs.Count; i++)
@@ -128,62 +131,61 @@ public class ShadowController : MonoBehaviour
                 return recordedInputs[i];
             }
         }
-        // Return last input if playback exceeds recorded time range
+        // 若超出记录范围，返回最后一个输入
         return recordedInputs[recordedInputs.Count - 1];
     }
 
-    // Applies horizontal movement to the shadow
+    // 应用水平移动
     private void Move(float input)
     {
-        // Maintain vertical velocity (gravity/jump) while updating horizontal speed
         Vector2 movement = new Vector2(input * moveSpeed, rb.velocity.y);
         rb.velocity = movement;
 
-        // Flip shadow sprite to match movement direction
+        // 根据移动方向翻转精灵
         if (input != 0)
         {
             transform.localScale = new Vector3(Mathf.Sign(input), 1f, 1f);
         }
     }
 
-    // Applies jump force and locks jump state until landing
+    // 执行跳跃（仅在落地状态下有效）
     private void Jump()
     {
         rb.velocity = new Vector2(rb.velocity.x, jumpForce);
-        isJumping = true; // Prevent multiple jumps mid-air
+        isJumping = true; // 锁定跳跃状态，直到落地
     }
 
-    // Checks if shadow is on valid ground OR other shadows (vertical + diagonal rays)
+    // 检测影子是否站在有效表面（地面/影子/玩家）
     private bool IsGrounded()
     {
-        // Combine ground and shadow layers for unified detection
-        LayerMask combinedDetectLayer = groundLayer | shadowLayer;
+        // 合并检测图层：地面 + 影子 + 玩家（新增玩家图层）
+        LayerMask combinedDetectLayer = groundLayer | playerLayer;
 
-        // Calculate diagonal ray directions (degrees → radians)
+        // 计算斜向射线方向（角度转弧度）
         float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
         Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
         Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
         Vector2 verticalDownDir = Vector2.down;
 
-        // Cast rays and check for collisions
+        // 发射射线检测碰撞
         RaycastHit2D verticalHit = Physics2D.Raycast(transform.position, verticalDownDir, groundCheckDistance, combinedDetectLayer);
         RaycastHit2D leftDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, leftDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
         RaycastHit2D rightDiagHit = enableDualDiagonalCheck ? Physics2D.Raycast(transform.position, rightDiagonalDir, groundCheckDistance, combinedDetectLayer) : default;
 
-        // Draw debug rays (visible in Scene view during play mode)
+        // 绘制调试射线
         DrawDebugRays(verticalDownDir, leftDiagonalDir, rightDiagonalDir);
 
-        // Return true if ANY ray hits valid surface
+        // 只要有一条射线命中有效表面（地面/影子/玩家），就判定为落地
         return verticalHit.collider != null || leftDiagHit.collider != null || rightDiagHit.collider != null;
     }
 
-    // Draws debug rays for shadow's ground check
+    // 绘制调试射线（场景视图可见）
     private void DrawDebugRays(Vector2 verticalDir, Vector2 leftDiagDir, Vector2 rightDiagDir)
     {
-        // Vertical ray (cyan)
+        // 垂直射线（青色）
         Debug.DrawRay(transform.position, verticalDir * groundCheckDistance, Color.cyan);
 
-        // Diagonal rays (magenta = left, green = right) if enabled
+        // 斜向射线（品红=左，绿色=右）
         if (enableDualDiagonalCheck)
         {
             Debug.DrawRay(transform.position, leftDiagDir * groundCheckDistance, Color.magenta);
@@ -191,27 +193,27 @@ public class ShadowController : MonoBehaviour
         }
     }
 
-    // Destroys shadow after action playback and landing
+    // 动作完成且落地后，销毁影子
     void FinishPlayback()
     {
         Destroy(gameObject);
     }
 
-    // Draws persistent gizmos for shadow's ground check (edit mode visibility)
+    // 绘制编辑模式下的持久化 gizmo（便于调整参数）
     void OnDrawGizmos()
     {
-        if (!Application.isPlaying) // Avoid overlapping with play-mode debug rays
+        if (!Application.isPlaying)
         {
             float angleInRadians = diagonalCheckAngle * Mathf.Deg2Rad;
             Vector2 leftDiagonalDir = new Vector2(-Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
             Vector2 rightDiagonalDir = new Vector2(Mathf.Sin(angleInRadians), -Mathf.Cos(angleInRadians)).normalized;
             Vector2 verticalDownDir = Vector2.down;
 
-            // Vertical gizmo ray (cyan)
+            // 垂直射线（青色）
             Gizmos.color = Color.cyan;
             Gizmos.DrawLine(transform.position, transform.position + (Vector3)verticalDownDir * groundCheckDistance);
 
-            // Diagonal gizmo rays (magenta = left, green = right) if enabled
+            // 斜向射线（品红=左，绿色=右）
             if (enableDualDiagonalCheck)
             {
                 Gizmos.color = Color.magenta;

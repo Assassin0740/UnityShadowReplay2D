@@ -18,6 +18,9 @@ public class Player : MonoBehaviour
     [Tooltip("Layer mask for detecting shadow clones (to jump on shadows)")]
     public LayerMask shadowLayer;
 
+    [Tooltip("Layer mask for detecting shadow clones (to jump on players)")]
+    public LayerMask playerLayer;
+
     [Header("Movement Settings")]
     [Tooltip("Horizontal movement speed (units per second)")]
     public float moveSpeed = 5f;
@@ -187,7 +190,8 @@ public class Player : MonoBehaviour
                     diagonalCheckAngle,
                     enableDualDiagonalCheck,
                     groundLayer,
-                    shadowLayer
+                    shadowLayer,
+                    playerLayer
                 );
             }
             else
